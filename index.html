@@ -92,7 +92,7 @@
 <body>
     <div>
         <label for="server">Server URL:</label>
-        <input type="text" id="server" value="ws://43.130.239.227:8083/mqtt">
+        <input type="text" id="server" value="wss://43.130.239.227:8084/mqtt">
     </div>
     <div>
         <label for="subscribe_topic">SubscribeTopic:</label>
@@ -149,14 +149,17 @@
         function connect() {
             const server = document.getElementById('server').value;
             const options = {
+				protocolId : 'MQTT',
+				protocolVersion:4,
                 keepalive: 60,
-                clientId: 'mqttjs_' + Math.random().toString(16).substring(2, 8),
+                clientId: 'mqttjs_' + Math.random().toString(16).substr(2, 8),
                 clean: true,
-                connectTimeout: 30 * 1000,
+                connectTimeout: 5 * 1000,
                 // By default, EMQX allows clients to connect without authentication.
                 username: '',
                 password: '',
                 reconnectPeriod: 1000,
+				rejectUnauthorized: false
             };
             client = mqtt.connect(server, options);
 
