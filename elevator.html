@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://unpkg.com/mqtt@5.6.1/dist/mqtt.min.js"></script>
+    <title>电梯控制面板</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 90vh;
+            background-color: #eaeaea;
+        }
+
+        .panel-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 10px;
+            border-radius: 20px;
+            background-color: #333;
+            box-shadow: 0px 0px 25px rgba(0, 0, 0, 0.5);
+        }
+
+        .panel {
+            display: grid;
+            grid-template-columns: repeat(2, 70px);
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .panel button {
+            width: 70px;
+            height: 70px;
+            border-radius: 50%;
+            border: 2px solid #555;
+            background-color: #ccc;
+            font-size: 24px;
+            color: #333;
+            cursor: pointer;
+            outline: none;
+            /*box-shadow: 0px 5px 5px rgba(0, 0, 0, 0.3);*/
+            box-shadow: inset 0 2px 3px rgba(255, 255, 255, 0.2), 0 4px 6px rgba(0, 0, 0, 0.2);
+            transition: background-color 0.2s, box-shadow 0.2s;
+            
+        }
+
+        .panel button:active {
+            background-color: #28a745; 
+            box-shadow: 0px 2px 2px rgba(0, 0, 0, 0.2);
+            transform: translateY(2px);
+        }
+
+        .panel button:focus {
+            outline: none; /* 去除点击后的默认高亮 */
+        }
+
+        .output {
+            width: 240px;
+            height: 150px;
+            border: 1px solid #333;
+            padding: 10px;
+            overflow-y: scroll;
+            white-space: pre-wrap;
+            font-size: 13px;
+            background-color: #f9f9f9;
+            color: #333;
+        }
+
+        .output-log {
+            background-color: #fff;
+            color: #333;
+            padding: 10px;
+            border-radius: 5px;
+            width: 260px;
+            margin-top: 20px;
+            text-align: left;
+        }
+
+        /* 8x8 点阵屏样式 */
+        .dot-matrix {
+            display: grid;
+            grid-template-columns: repeat(9, 13px);
+            grid-gap: 3px;
+            margin-bottom: 13px;
+        }
+
+        .dot {
+            width: 13px;
+            height: 13px;
+            border-radius: 50%;
+            background-color: #444;
+        }
+
+        .dot.active {
+            background-color: #ff0000; /* 激活点阵的颜色为红色 */
+        }
+
+    </style>
+</head>
+<body>
+    <div class="panel-container">
+        <h1 style="color: white;"></h1>
+        
+        <!-- 8x8 点阵屏 -->
+        <div class="dot-matrix" id="dot-matrix">
+            <!-- 使用JS自动生成8x8的点 -->
+        </div>
+
+        <div class="panel">
+            <button onclick="goto(1)">1</button>
+            <button onclick="goto(2)">2</button>
+            <button onclick="goto(3)">3</button>
+            <button onclick="goto(4)">4</button>
+            <button onclick="goto(5)">5</button>
+            <button onclick="goto(6)">6</button>
+        </div>
+
+        <div class="output-log">
+            <div class="output" id="output"></div>
+        </div>
+    </div>
+    <script>
+        const STOPED = 0
+        const FOREWARD = 1
+        const REVERSELY = 2
+        const BREAKING= 3
+        const SUBSCRIBE_TOPIC = 'elev_data_03_Itsd'
+        const PUBLISH_TOPIC = 'elev_cmd_03_Itsd'
+		const MQTT_SERVER_URL = 'ws://broker.emqx.io:8083/mqtt'
+        let elevatorStatus = STOPED;
+        let currentFloor = 0; // 初始楼层
+        let finalTargetFloor = 1; // 最终目标楼层
+        let arrowInterval; // 控制箭头滑动的interval
+        let step = 1;
+
+        function log(message) {
+            message += "\n";
+            const output = document.getElementById('output');
+            output.innerText += message;
+            output.scrollTop = output.scrollHeight; // 滚动到最新内容
+        }
+
+        let client = null;
+
+        function getBrowserAndOSInfo() {
+            var userAgent = navigator.userAgent;
+            var platform = navigator.platform;
+            var browserInfo = {};
+            var osInfo = {};
+
+            // 检测浏览器类型和版本
+            var browserRegex = {
+                'Edge': /Edge\/(\d+)/i,
+                'Chrome': /Chrome\/(\d+)/i,
+                'Firefox': /Firefox\/(\d+)/i,
+                'Safari': /Version\/(\d+).+Safari/i,
+                'Opera': /OPR\/(\d+)/i,
+                'IE': /Trident\/.*rv:(\d+)/i
+            };
+
+            for (var key in browserRegex) {
+                if (new RegExp(browserRegex[key]).test(userAgent)) {
+                    browserInfo.name = key;
+                    browserInfo.version = new RegExp(browserRegex[key]).exec(userAgent)[1];
+                    break;
+                }
+            }
+
+            // 检测操作系统信息
+            var osRegex = {
+                'Windows': /Windows NT (\d+\.\d+)/i,
+                'MacOS': /Mac OS X (\d+[_.]\d+)/i,
+                'iOS': /iOS (\d+[_.]\d+)/i,
+                'Android': /Android (\d+[\.\d+]*)/i,
+                'Linux': /Linux/i
+            };
+
+            for (var key in osRegex) {
+                if (new RegExp(osRegex[key]).test(userAgent)) {
+                    osInfo.name = key;
+                    var matches = new RegExp(osRegex[key]).exec(userAgent);
+                    if (matches) {
+                        osInfo.version = matches[1].replace(/_/g, '.');
+                    }
+                    break;
+                }
+            }
+
+            return { browser: browserInfo, os: osInfo };
+        }
+
+        function generateDeviceID() {
+            var info = getBrowserAndOSInfo();
+            var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+            var deviceID = '';
+            for (var i = 0; i < 6; i++) {
+                var randomIndex = Math.floor(Math.random() * chars.length);
+                deviceID += chars.substring(randomIndex, randomIndex + 1);
+            }
+            return info.browser.name+ "-" + info.os.name + "-" + deviceID;
+        }
+
+        var userAgent = navigator.userAgent;
+        console.log(userAgent);
+
+        function mqtt_connect() {
+            const options = {
+                keepalive: 60,
+                clientId: generateDeviceID(),
+                clean: true,
+                connectTimeout: 15 * 1000,
+                // By default, EMQX allows clients to connect without authentication.
+                username: '',
+                password: '',
+                //reconnectPeriod: 1000,
+				rejectUnauthorized: false
+            };
+            client = mqtt.connect(MQTT_SERVER_URL, options);
+            client.on('error', (err) => {
+                console.log('Connection error: ', err);
+                client.end();
+            });
+
+            client.on('reconnect', () => {
+                log('Reconnecting...');
+            });
+
+            client.on('connect', () => {
+                log('Client connected');
+                mqtt_subscribe();
+                queryCurrentFloor();
+            });
+
+            client.on('message', (topic, payload) => {
+				jsonString = payload.toString()
+                console.log('Received Message: ' + jsonString + '\nOn topic: ' + topic)
+				// 解析JSON字符串为对象
+				var obj = JSON.parse(jsonString);
+                elevatorStatus = obj.status;
+                currentFloor = obj.currentFloor
+				finalTargetFloor = obj.targetFloor;
+                if(elevatorStatus===FOREWARD){
+                    log(`电梯上行中....准备去往${finalTargetFloor}层！`);
+                }else if (elevatorStatus===REVERSELY) {
+                    log(`电梯下行中....准备去往${finalTargetFloor}层！`);
+                } else {
+                    log(`电梯停靠在 ${currentFloor} 层！`);
+                }
+            });
+        }
+
+        function mqtt_disconnect() {
+            if (client && client.connected) {
+                client.end();
+                log('Client disconnected');
+            } else {
+                log('Client not connected');
+            }
+        }
+
+        function mqtt_subscribe() {
+            client.subscribe(SUBSCRIBE_TOPIC, { qos: 0 }, (error) => {
+                if (error) {
+                    console.log('Subscribe error:', error);
+                } else {
+                    log(`Subscribed to topic ${SUBSCRIBE_TOPIC}`);
+                }
+            });
+        }
+
+        function mqtt_publish(payload) {
+            client.publish(PUBLISH_TOPIC, payload, { qos: 0 }, (error) => {
+                if (error) {
+                    console.error(error);
+                } else {
+                    console.log(`Published to topic:${PUBLISH_TOPIC}, message:${payload}`);
+                }
+            });
+        }
+
+        const floorPatterns = {
+            1: [  // 数字1的点阵图案
+                0,0,0,0,1,1,0,0,0,
+                0,0,0,1,1,1,0,0,0,
+                0,0,0,0,1,1,0,0,0,
+                0,0,0,0,1,1,0,0,0,
+                0,0,0,0,1,1,0,0,0,
+                0,0,0,0,1,1,0,0,0,
+                0,0,0,0,1,1,0,0,0,
+                0,0,0,1,1,1,1,0,0,
+                0,0,0,1,1,1,1,0,0
+            ],
+            2: [  // 数字2的点阵图案
+                0,0,1,1,1,1,1,0,0,
+                0,1,1,1,1,1,1,1,0,
+                0,1,1,0,0,0,1,1,0,
+                0,0,0,0,0,1,1,0,0,
+                0,0,0,0,1,1,0,0,0,
+                0,0,0,1,1,0,0,0,0,
+                0,0,1,1,0,0,0,0,0,
+                0,1,1,1,1,1,1,1,0,
+                0,1,1,1,1,1,1,1,0
+            ],
+            3: [  // 数字3的点阵图案
+                0,0,1,1,1,1,1,0,0,
+                0,1,1,0,0,0,1,1,0,
+                0,0,0,0,0,0,1,1,0,
+                0,0,0,0,0,1,1,1,0,
+                0,0,0,1,1,1,1,0,0,
+                0,0,0,0,0,1,1,1,0,
+                0,1,0,0,0,0,1,1,0,
+                0,1,1,0,0,0,1,1,0,
+                0,0,1,1,1,1,1,0,0
+            ],
+            4: [  // 数字4的点阵图案
+                0,0,0,0,1,1,1,0,0,
+                0,0,0,1,1,1,1,0,0,
+                0,0,1,1,0,1,1,0,0,
+                0,1,1,0,0,1,1,0,0,
+                1,1,1,1,1,1,1,1,1,
+                1,1,1,1,1,1,1,1,1,
+                0,0,0,0,0,1,1,0,0,
+                0,0,0,0,0,1,1,0,0,
+                0,0,0,0,0,1,1,0,0
+            ],
+            5: [  // 数字5的点阵图案
+                0,1,1,1,1,1,1,0,0,
+                0,1,1,1,1,1,1,1,0,
+                0,1,1,0,0,0,0,0,0,
+                0,1,1,0,0,0,0,0,0,
+                0,1,1,1,1,1,1,0,0,
+                0,0,0,0,0,0,1,1,0,
+                0,1,1,0,0,0,1,1,0,
+                0,1,1,1,1,1,1,0,0,
+                0,0,1,1,1,1,0,0,0
+            ],
+            6: [  // 数字6的点阵图案
+                0,0,1,1,1,1,1,0,0,
+                0,1,1,1,1,1,1,1,0,
+                0,1,1,0,0,0,0,0,0,
+                0,1,1,1,1,1,1,0,0,
+                0,1,1,1,1,1,1,1,0,
+                0,1,1,0,0,0,1,1,0,
+                0,1,1,0,0,0,1,1,0,
+                0,1,1,1,1,1,1,1,0,
+                0,0,1,1,1,1,1,0,0
+            ]
+        };
+
+        // 定义箭头的位图
+        const arrow = [
+            0b000000000,
+            0b000010000,
+            0b000111000,
+            0b001010100,
+            0b010010010,
+            0b000010000,
+            0b000010000,
+            0b000010000,
+            0b000000000,
+        ];
+
+        function goto(targetFloor) {
+            finalTargetFloor = targetFloor;
+            const payload = {
+                cmd: "start",
+                targetFloor: targetFloor
+            };
+            mqtt_publish(JSON.stringify(payload))
+        }
+
+        function queryCurrentFloor() {
+            const payload = {
+                cmd: "query"
+            };
+            mqtt_publish(JSON.stringify(payload))
+        }
+
+        function executeImmediately (){
+            step += 1;
+            if (elevatorStatus === FOREWARD) {
+                moveArrow('up', step);
+            } else if (elevatorStatus === REVERSELY) {
+                moveArrow('down', step);
+            } else if(currentFloor>0) {
+                displayFloorNumber(currentFloor);
+            }
+        }
+
+        function log(message) {
+            const output = document.getElementById('output');
+            output.innerText += message + "\n";
+            output.scrollTop = output.scrollHeight; // 滚动到最新内容
+        }
+
+        function moveArrow(mode = 'up', x = 0, delay = 200) {
+            const arrowLength = arrow.length;
+            const dotMatrix = document.querySelectorAll('.dot');
+
+            // 清空屏幕
+            dotMatrix.forEach(dot => dot.classList.remove('active'));
+
+            // 绘制箭头
+            for (let row = 0; row < arrowLength; row++) {
+                const position = (row + x) % 10;
+                if (position >= arrowLength) continue;
+
+                const buffer_row = Math.abs((mode === 'up' ? row : arrowLength - row -1));
+                const pattern = arrow[position];
+
+                // 根据位图设置点阵
+                for (let col = 0; col < 9; col++) {
+                    if (pattern & (1 << col)) {
+                        const index = buffer_row * 9 + col;
+                        dotMatrix[index].classList.add('active');
+                    }
+                }
+            }
+        }
+
+        function displayFloorNumber(floor) {
+            const pattern = floorPatterns[floor];
+            updateDotMatrix(pattern);
+        }
+
+        function updateDotMatrix(pattern) {
+            const dots = document.querySelectorAll('.dot');
+            dots.forEach((dot, index) => {
+                if (pattern[index] === 1) {
+                    dot.classList.add('active');
+                } else {
+                    dot.classList.remove('active');
+                }
+            });
+        }
+
+        // 动态生成8x8点阵
+        const dotMatrix = document.getElementById('dot-matrix');
+        for (let i = 0; i < 81; i++) {
+            const dot = document.createElement('div');
+            dot.classList.add('dot');
+            dotMatrix.appendChild(dot);
+        }
+
+        mqtt_connect()
+        // 初始显示电梯楼层
+        const interval = setInterval(executeImmediately, 200); // 500毫秒秒更新一次
+    </script>
+
+</body>
+</html>
