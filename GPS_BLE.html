@@ -274,7 +274,7 @@
                 if (lat && lng) {
                     updateGPSLocation(lat, lng); // 更新 GPS 位置
                 }
-            } else if (message.startsWith('$GPRMC')) {
+            } else if (message.startsWith('$GNRMC')) {
                 // 解析 GPRMC 报文（包含速度、时间等信息）
                 const parts = message.split(',');
                 const lat = convertToDecimalDegrees(parts[3], parts[4]);
