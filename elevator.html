@@ -124,20 +124,34 @@
         <div class="output-log">
             <div class="output" id="output"></div>
         </div>
+
+		<div class="input-container">
+			<input type="text" id="payload" placeholder="请输入需要执行的指令">
+			<button onclick="sendPayload()">发送</button>
+		</div>
     </div>
     <script>
         const STOPED = 0
         const FOREWARD = 1
         const REVERSELY = 2
         const BREAKING= 3
-        const SUBSCRIBE_TOPIC = 'elev_data_03_Itsd'
-        const PUBLISH_TOPIC = 'elev_cmd_03_Itsd'
+        const SUBSCRIBE_TOPIC = 'elev_data_05_lze'
+        const PUBLISH_TOPIC = 'elev_cmd_05_lze'
 		const MQTT_SERVER_URL = 'ws://broker.emqx.io:8083/mqtt'
         let elevatorStatus = STOPED;
         let currentFloor = 0; // 初始楼层
         let finalTargetFloor = 1; // 最终目标楼层
         let arrowInterval; // 控制箭头滑动的interval
         let step = 1;
+
+		function sendPayload() {
+			const payload = document.getElementById('payload');
+			if (payload.value.trim().length === 0)
+			{
+				return
+			}
+            mqtt_publish(payload.value.trim())
+		}
 
         function log(message) {
             message += "\n";
